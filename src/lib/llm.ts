@@ -1,158 +1,129 @@
-import { DEFAULT_OPENAI_BASE, loadSettings } from "@/lib/settings";
-
-export type LlmProvider = "openai" | "anthropic";
-
-export type LlmConfig = {
-  openaiKey: string;
-  openaiModel: string;
-  openaiBase: string;
-  anthropicKey: string;
-  anthropicModel: string;
-  tavilyKey: string;
-};
-
 type Message = { role: "system" | "user" | "assistant"; content: string };
 
-export function llmConfigFromSettings(): LlmConfig {
-  const settings = loadSettings();
+const XAI_BASE = "https://api.x.ai/v1";
+const DEFAULT_XAI_MODEL = "grok-4.7";
+
+type GrokConfig = { key: string; model: string; base: string };
+
+export function grokConfigured(): boolean {
+  return Boolean(process.env.XAI_API_KEY);
+}
+
+function grokConfig(): GrokConfig | null {
+  const key = process.env.XAI_API_KEY;
+  if (!key) return null;
   return {
-    openaiKey: settings.openaiKey.trim(),
-    openaiModel: settings.openaiModel.trim() || "gpt-4o-mini",
-    openaiBase: (settings.openaiBase.trim() || DEFAULT_OPENAI_BASE).replace(/\/$/, ""),
-    anthropicKey: settings.anthropicKey.trim(),
-    anthropicModel: settings.anthropicModel.trim() || "claude-3-5-haiku-latest",
-    tavilyKey: settings.tavilyKey.trim(),
+    key,
+    model: process.env.XAI_MODEL || DEFAULT_XAI_MODEL,
+    base: XAI_BASE,
   };
 }
 
-export function llmProvider(config: LlmConfig = llmConfigFromSettings()): LlmProvider | null {
-  if (config.openaiKey || (config.openaiBase && config.openaiBase !== DEFAULT_OPENAI_BASE)) return "openai";
-  if (config.anthropicKey) return "anthropic";
-  return null;
-}
-
-export function llmConfigured(config: LlmConfig = llmConfigFromSettings()): boolean {
-  return llmProvider(config) !== null;
-}
-
-export async function completeText(config: LlmConfig, messages: Message[], json = false): Promise<string | null> {
-  const provider = llmProvider(config);
-  if (!provider) return null;
+export async function completeText(messages: Message[], json = false): Promise<string | null> {
+  const config = grokConfig();
+  if (!config) return null;
   try {
-    if (provider === "openai") return await openAiComplete(config, messages, json);
-    return await anthropicComplete(config, messages);
+    const response = await fetch(`${config.base}/chat/completions`, {
+      method: "POST",
+      signal: AbortSignal.timeout(25000),
+      headers: {
+        Authorization: `Bearer ${config.key}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: config.model,
+        temperature: json ? 0 : 0.4,
+        messages,
+        ...(json ? { response_format: { type: "json_object" } } : {}),
+      }),
+    });
+    if (!response.ok) return null;
+    const body = (await response.json()) as { choices?: { message?: { content?: string } }[] };
+    return body.choices?.[0]?.message?.content ?? null;
   } catch (error) {
-    console.error("LLM request failed", error instanceof Error ? error.message : "unknown");
+    console.error("Grok request failed", error instanceof Error ? error.message : "unknown");
     return null;
   }
 }
 
-export async function streamText(config: LlmConfig, messages: Message[], onDelta: (chunk: string) => void): Promise<boolean> {
-  const provider = llmProvider(config);
-  if (!provider) return false;
+export async function streamText(messages: Message[], onDelta: (chunk: string) => void): Promise<boolean> {
+  const config = grokConfig();
+  if (!config) return false;
   try {
-    if (provider === "openai") return await openAiStream(config, messages, onDelta);
-    return await anthropicStream(config, messages, onDelta);
+    const response = await fetch(`${config.base}/chat/completions`, {
+      method: "POST",
+      signal: AbortSignal.timeout(25000),
+      headers: {
+        Authorization: `Bearer ${config.key}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: config.model,
+        temperature: 0.4,
+        stream: true,
+        messages,
+      }),
+    });
+    if (!response.ok || !response.body) return false;
+    await readSse(response.body, (data) => {
+      if (data === "[DONE]") return;
+      const parsed = JSON.parse(data) as { choices?: { delta?: { content?: string } }[] };
+      const chunk = parsed.choices?.[0]?.delta?.content;
+      if (chunk) onDelta(chunk);
+    });
+    return true;
   } catch (error) {
-    console.error("LLM stream failed", error instanceof Error ? error.message : "unknown");
+    console.error("Grok stream failed", error instanceof Error ? error.message : "unknown");
     return false;
   }
 }
 
-async function openAiComplete(config: LlmConfig, messages: Message[], json: boolean): Promise<string | null> {
-  const response = await fetch(`${config.openaiBase}/chat/completions`, {
-    method: "POST",
-    signal: AbortSignal.timeout(25000),
-    headers: {
-      ...(config.openaiKey ? { Authorization: `Bearer ${config.openaiKey}` } : {}),
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: config.openaiModel,
-      temperature: json ? 0 : 0.4,
-      messages,
-      ...(json ? { response_format: { type: "json_object" } } : {}),
-    }),
-  });
-  if (!response.ok) return null;
-  const body = (await response.json()) as { choices?: { message?: { content?: string } }[] };
-  return body.choices?.[0]?.message?.content ?? null;
+export async function grokWebSearch(query: string): Promise<{ text: string; urls: { label: string; url: string }[] } | null> {
+  const config = grokConfig();
+  if (!config) return null;
+  try {
+    const response = await fetch(`${config.base}/responses`, {
+        method: "POST",
+        signal: AbortSignal.timeout(20000),
+        headers: {
+          Authorization: `Bearer ${config.key}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: config.model,
+          tools: [{ type: "web_search" }],
+          input: query,
+        }),
+      });
+      if (!response.ok) return null;
+      const body = (await response.json()) as {
+        output_text?: string;
+        output?: { content?: { text?: string; annotations?: { url?: string; title?: string }[] }[] }[];
+      };
+      const urls: { label: string; url: string }[] = [];
+      for (const block of body.output ?? []) {
+        for (const part of block.content ?? []) {
+          for (const note of part.annotations ?? []) {
+            if (note.url) urls.push({ label: note.title || hostLabel(note.url), url: note.url });
+          }
+        }
+      }
+      const text =
+        body.output_text ||
+        (body.output ?? []).flatMap((block) => block.content ?? []).map((part) => part.text ?? "").join("\n");
+      if (text || urls.length) return { text, urls };
+  } catch (error) {
+    console.error("Grok web search failed", error instanceof Error ? error.message : "unknown");
+  }
+  return null;
 }
 
-async function openAiStream(config: LlmConfig, messages: Message[], onDelta: (chunk: string) => void): Promise<boolean> {
-  const response = await fetch(`${config.openaiBase}/chat/completions`, {
-    method: "POST",
-    signal: AbortSignal.timeout(25000),
-    headers: {
-      ...(config.openaiKey ? { Authorization: `Bearer ${config.openaiKey}` } : {}),
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: config.openaiModel,
-      temperature: 0.4,
-      stream: true,
-      messages,
-    }),
-  });
-  if (!response.ok || !response.body) return false;
-  await readSse(response.body, (data) => {
-    if (data === "[DONE]") return;
-    const parsed = JSON.parse(data) as { choices?: { delta?: { content?: string } }[] };
-    const chunk = parsed.choices?.[0]?.delta?.content;
-    if (chunk) onDelta(chunk);
-  });
-  return true;
-}
-
-function anthropicHeaders(config: LlmConfig): HeadersInit {
-  return {
-    "x-api-key": config.anthropicKey,
-    "anthropic-version": "2023-06-01",
-    "anthropic-dangerous-direct-browser-access": "true",
-    "Content-Type": "application/json",
-  };
-}
-
-async function anthropicComplete(config: LlmConfig, messages: Message[]): Promise<string | null> {
-  const system = messages.filter((message) => message.role === "system").map((message) => message.content).join("\n");
-  const chat = messages.filter((message) => message.role !== "system");
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    signal: AbortSignal.timeout(25000),
-    headers: anthropicHeaders(config),
-    body: JSON.stringify({
-      model: config.anthropicModel,
-      max_tokens: 1200,
-      system,
-      messages: chat.map((message) => ({ role: message.role, content: message.content })),
-    }),
-  });
-  if (!response.ok) return null;
-  const body = (await response.json()) as { content?: { text?: string }[] };
-  return body.content?.map((part) => part.text ?? "").join("") || null;
-}
-
-async function anthropicStream(config: LlmConfig, messages: Message[], onDelta: (chunk: string) => void): Promise<boolean> {
-  const system = messages.filter((message) => message.role === "system").map((message) => message.content).join("\n");
-  const chat = messages.filter((message) => message.role !== "system");
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    signal: AbortSignal.timeout(25000),
-    headers: anthropicHeaders(config),
-    body: JSON.stringify({
-      model: config.anthropicModel,
-      max_tokens: 400,
-      stream: true,
-      system,
-      messages: chat.map((message) => ({ role: message.role, content: message.content })),
-    }),
-  });
-  if (!response.ok || !response.body) return false;
-  await readSse(response.body, (data) => {
-    const parsed = JSON.parse(data) as { type?: string; delta?: { text?: string } };
-    if (parsed.type === "content_block_delta" && parsed.delta?.text) onDelta(parsed.delta.text);
-  });
-  return true;
+function hostLabel(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "Ordinance source";
+  }
 }
 
 async function readSse(body: ReadableStream<Uint8Array>, onData: (data: string) => void): Promise<void> {

@@ -5,20 +5,14 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { SaveDialog } from "@/components/save-dialog";
 import { ReportView } from "@/components/report-view";
-import { SettingsDialog } from "@/components/settings-dialog";
 import { Sheet } from "@/components/sheet";
 import { syncProjects } from "@/lib/account";
-import { streamAcknowledgement, interpretAnswer } from "@/lib/assist";
-import { buildChecklist, preserveChecklistEdits } from "@/lib/checklist";
+import { preserveChecklistEdits } from "@/lib/checklist";
 import { profileHash, projectTitle, reportFilename, uid } from "@/lib/format";
-import { canDraft, nextQuestion, questionById } from "@/lib/interview";
-import { llmConfigFromSettings, llmConfigured } from "@/lib/llm";
-import { renderReportPdf } from "@/lib/pdf";
+import { applyAnswer, canDraft, nextQuestion, questionById } from "@/lib/interview";
 import { pineStreetProject } from "@/lib/sample";
-import { summarizeAnalysis } from "@/lib/summary";
 import { browserSupabase } from "@/lib/supabase/client";
 import { supabasePublicConfig } from "@/lib/supabase/env";
-import { lookupZoning } from "@/lib/zoning-lookup";
 import {
   createProject,
   loadActiveId,
@@ -42,7 +36,6 @@ export function Studio() {
   const [downloading, setDownloading] = useState(false);
   const [llmOn, setLlmOn] = useState(false);
   const [authOn, setAuthOn] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [email, setEmail] = useState<string | null>(null);
   const [toast, setToast] = useState("");
   const threadRef = useRef<HTMLDivElement>(null);
@@ -59,6 +52,11 @@ export function Studio() {
     projectRef.current = found;
     setProject(found);
     setReady(true);
+    fetch("/api/health")
+      .then((response) => response.json())
+      .then((data: { llm?: boolean }) => setLlmOn(Boolean(data.llm)))
+      .catch(() => undefined);
+    setAuthOn(Boolean(supabasePublicConfig()));
     const supabase = browserSupabase();
     if (!supabase) return;
     supabase.auth.getUser().then(({ data }) => setEmail(data.user?.email ?? null));
@@ -71,21 +69,10 @@ export function Studio() {
   }, [project?.messages.length, busy]);
 
   useEffect(() => {
-    const sync = () => {
-      setLlmOn(llmConfigured(llmConfigFromSettings()));
-      setAuthOn(Boolean(supabasePublicConfig()));
-    };
-    sync();
-    window.addEventListener("lintel-settings", sync);
-    return () => window.removeEventListener("lintel-settings", sync);
-  }, []);
-
-  useEffect(() => {
     function onKey(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
       setSaveOpen(false);
       setReportOpen(false);
-      setSettingsOpen(false);
       setPanel(false);
     }
     window.addEventListener("keydown", onKey);
@@ -116,13 +103,23 @@ export function Studio() {
       ...current,
       messages: [...current.messages, { id, role: "assistant", content: "" }],
     }));
-    let content = fallback;
+    let content = fallback + (nextPrompt ? `\n\n${nextPrompt}` : "");
     try {
-      content = await streamAcknowledgement({
-        fallback,
-        userText,
-        profileSummary: summary,
-        onDelta: (snapshot) => {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fallback, nextPrompt, userText, profileSummary: summary }),
+      });
+      if (response.status === 429) throw new Error("Too many requests. Wait a minute and try again.");
+      if (response.ok && response.body) {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        content = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          content += decoder.decode(value);
+          const snapshot = content;
           const current = projectRef.current;
           if (!current) return;
           const next = {
@@ -131,12 +128,12 @@ export function Studio() {
           };
           projectRef.current = next;
           setProject(next);
-        },
-      });
-    } catch {
-      content = fallback;
+        }
+      }
+    } catch (error) {
+      content = fallback + (nextPrompt ? `\n\n${nextPrompt}` : "");
+      if (error instanceof Error && error.message.startsWith("Too many")) throw error;
     }
-    if (nextPrompt) content = `${content}\n\n${nextPrompt}`;
     const current = projectRef.current;
     if (!current) return;
     commit({
@@ -146,14 +143,18 @@ export function Studio() {
   }
 
   async function runAnalysis(base: ProjectRecord, leadIn: ChatMessage[]) {
-    const config = llmConfigFromSettings();
-    const findings = await lookupZoning(base.profile, config);
-    const checklist = preserveChecklistEdits(base.checklist, buildChecklist(base.profile, findings));
-    const summary = summarizeAnalysis(base.profile, checklist);
-    const zoningNote = findings?.codeTitle ? ` Ordinance title seen in search: ${findings.codeTitle}.` : "";
+    const response = await fetch("/api/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ profile: base.profile }),
+    });
+    if (response.status === 429) throw new Error("Too many requests. Wait a minute and try again.");
+    if (!response.ok) throw new Error("The analysis didn't come back.");
+    const body = (await response.json()) as { checklist: ProjectRecord["checklist"]; summary: string };
+    const checklist = preserveChecklistEdits(base.checklist, body.checklist);
     commit({
       ...base,
-      messages: [...leadIn, { id: uid(), role: "assistant", content: `${summary}${zoningNote}` }],
+      messages: [...leadIn, { id: uid(), role: "assistant", content: body.summary }],
       checklist,
       analyzedHash: profileHash(base.profile),
     });
@@ -203,7 +204,20 @@ export function Studio() {
         return;
       }
 
-      const result = await interpretAnswer(current.profile, asked.id, trimmed);
+      let result = applyAnswer(current.profile, asked.id, trimmed);
+      if (!result.ok) {
+        try {
+          const response = await fetch("/api/interpret", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ profile: current.profile, questionId: asked.id, text: trimmed }),
+          });
+          if (response.status === 429) throw new Error("Too many requests. Wait a minute and try again.");
+          if (response.ok) result = await response.json();
+        } catch (error) {
+          if (error instanceof Error && error.message.startsWith("Too many")) throw error;
+        }
+      }
       const skipped = result.ok && result.skip ? [...current.skipped, asked.id] : current.skipped;
       const withUser: ProjectRecord = { ...current, profile: result.profile, skipped, messages: [...current.messages, userMessage] };
       if (!result.ok) {
@@ -260,16 +274,23 @@ export function Studio() {
     if (!current) return;
     setDownloading(true);
     try {
-      const bytes = await renderReportPdf(current.profile, current.checklist);
-      const copy = new Uint8Array(bytes.byteLength);
-      copy.set(bytes);
-      const blob = new Blob([copy.buffer], { type: "application/pdf" });
+      const response = await fetch("/api/report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ profile: current.profile, checklist: current.checklist }),
+      });
+      if (response.status === 429) {
+        setToast("Too many requests. Wait a minute and try the PDF again.");
+        return;
+      }
+      if (!response.ok) throw new Error("PDF failed");
+      const blob = await response.blob();
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
       anchor.download = reportFilename(projectTitle(current.profile));
       anchor.click();
-      URL.revokeObjectURL(url);
+      window.setTimeout(() => URL.revokeObjectURL(url), 1500);
     } catch {
       setToast("The PDF didn't generate. Try again in a moment.");
     } finally {
@@ -366,8 +387,7 @@ export function Studio() {
           <button className="ghost" type="button" onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")} aria-label="Toggle color theme">
             {resolvedTheme === "dark" ? "Light" : "Dark"}
           </button>
-          <button className="ghost" type="button" onClick={() => setSettingsOpen(true)}>Model</button>
-          <button className="solid" type="button" onClick={() => (email ? void saveToAccount() : authOn ? setSaveOpen(true) : setSettingsOpen(true))}>
+          <button className="solid" type="button" onClick={() => (email ? void saveToAccount() : setSaveOpen(true))}>
             Save
           </button>
         </div>
@@ -441,9 +461,7 @@ export function Studio() {
               <button className="solid" type="submit" disabled={busy || !draft.trim()}>{busy ? "…" : "Send"}</button>
             </form>
             <div className="status-line">
-              <button className="texty" type="button" onClick={() => setSettingsOpen(true)} style={{ padding: 0 }}>
-                {llmOn ? "Model key is on this device. Ordinance search can run in the browser." : "The interview runs on this desk. Add a model key to read a city's ordinance."}
-              </button>
+              <span>{llmOn ? "Ordinance search is on." : "The interview runs on this desk. Ordinance search starts when the server has an xAI key."}</span>
               <span>{email ?? "Not saved to an account"}</span>
             </div>
             {toast ? <p className="status-line">{toast}</p> : null}
@@ -476,7 +494,6 @@ export function Studio() {
           onSignedIn={saveToAccount}
         />
       ) : null}
-      {settingsOpen ? <SettingsDialog onClose={() => setSettingsOpen(false)} /> : null}
       {reportOpen ? (
         <ReportView
           profile={project.profile}

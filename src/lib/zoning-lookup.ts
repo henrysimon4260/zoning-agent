@@ -1,4 +1,4 @@
-import { completeText, type LlmConfig } from "@/lib/llm";
+import { completeText, grokConfigured, grokWebSearch } from "@/lib/llm";
 import { sanitizeTopic } from "@/lib/sources";
 import type { ProjectProfile, ZoningFindings } from "@/lib/types";
 
@@ -10,24 +10,22 @@ function placeQuery(profile: ProjectProfile): string {
     .join(" ");
 }
 
-export async function lookupZoning(profile: ProjectProfile, config: LlmConfig): Promise<ZoningFindings | null> {
+export async function lookupZoning(profile: ProjectProfile): Promise<ZoningFindings | null> {
   if (!profile.city && !profile.county && !profile.state) return null;
-  if (!config.openaiKey && !config.tavilyKey && !config.anthropicKey) return null;
+  if (!grokConfigured()) return null;
   const query = placeQuery(profile);
-  const browser = typeof window !== "undefined";
   try {
-    const tavily = await tavilySearch(query, config.tavilyKey);
-    if (tavily) return await findingsFromPages(profile, config, tavily.excerpt, tavily.sources, true);
-    const searched = config.openaiKey ? await openaiSearch(query, config) : null;
-    const links = !browser && searched?.urls?.length ? searched.urls : !browser ? await duckLinks(query) : [];
-    const pages = browser ? [] : await fetchPages(links.slice(0, 2));
+    const searched = await grokWebSearch(
+      `Find the adopted zoning code for: ${query}. Prefer Municode, American Legal, eCode360, or a city .gov page. Summarize only rules you can point to, and list the source URLs.`,
+    );
+    const links = searched?.urls?.length ? searched.urls : await duckLinks(query);
+    const pages = await fetchPages(links.slice(0, 2));
     const excerpt = [searched?.text, ...pages.map((page) => page.text)].filter(Boolean).join("\n\n").slice(0, 14000);
-    const sources = [
-      ...(searched?.urls ?? []),
-      ...pages.map((page) => ({ label: page.label, url: page.url })),
-    ].filter((source, index, all) => all.findIndex((item) => item.url === source.url) === index);
+    const sources = [...(searched?.urls ?? []), ...pages.map((page) => ({ label: page.label, url: page.url }))].filter(
+      (source, index, all) => all.findIndex((item) => item.url === source.url) === index,
+    );
     if (!excerpt.trim() && sources.length === 0) return null;
-    return await findingsFromPages(profile, config, excerpt, sources, pages.length > 0);
+    return await findingsFromPages(profile, excerpt, sources, pages.length > 0);
   } catch (error) {
     console.error("Zoning lookup failed", error instanceof Error ? error.message : "unknown");
     return null;
@@ -36,13 +34,11 @@ export async function lookupZoning(profile: ProjectProfile, config: LlmConfig): 
 
 async function findingsFromPages(
   profile: ProjectProfile,
-  config: LlmConfig,
   excerpt: string,
   sources: { label: string; url: string }[],
   trustedExcerpt: boolean,
 ): Promise<ZoningFindings | null> {
   const raw = await completeText(
-    config,
     [
       {
         role: "system",
@@ -96,67 +92,6 @@ Return JSON:
   } catch {
     return { sources };
   }
-}
-
-async function tavilySearch(query: string, key: string): Promise<{ excerpt: string; sources: { label: string; url: string }[] } | null> {
-  if (!key) return null;
-  const response = await fetch("https://api.tavily.com/search", {
-    method: "POST",
-    signal: AbortSignal.timeout(12000),
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      api_key: key,
-      query,
-      search_depth: "basic",
-      max_results: 4,
-      include_raw_content: true,
-    }),
-  });
-  if (!response.ok) return null;
-  const body = (await response.json()) as {
-    results?: { title?: string; url?: string; content?: string; raw_content?: string }[];
-  };
-  const results = (body.results ?? []).filter((result) => result.url);
-  if (!results.length) return null;
-  return {
-    excerpt: results.map((result) => result.raw_content || result.content || "").join("\n\n").slice(0, 14000),
-    sources: results.map((result) => ({ label: result.title || hostLabel(result.url || ""), url: result.url || "" })),
-  };
-}
-
-async function openaiSearch(query: string, config: LlmConfig): Promise<{ text: string; urls: { label: string; url: string }[] } | null> {
-  if (!config.openaiKey) return null;
-  for (const tool of ["web_search_preview", "web_search"]) {
-    const response = await fetch(`${config.openaiBase}/responses`, {
-      method: "POST",
-      signal: AbortSignal.timeout(20000),
-      headers: {
-        Authorization: `Bearer ${config.openaiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: config.openaiModel,
-        tools: [{ type: tool }],
-        input: `Find the adopted zoning code for: ${query}. Prefer Municode, American Legal, eCode360, or a city .gov page. Summarize only rules you can point to, and list the source URLs.`,
-      }),
-    });
-    if (!response.ok) continue;
-    const body = (await response.json()) as {
-      output_text?: string;
-      output?: { type?: string; content?: { type?: string; text?: string; annotations?: { url?: string; title?: string }[] }[] }[];
-    };
-    const urls: { label: string; url: string }[] = [];
-    for (const block of body.output ?? []) {
-      for (const part of block.content ?? []) {
-        for (const note of part.annotations ?? []) {
-          if (note.url) urls.push({ label: note.title || hostLabel(note.url), url: note.url });
-        }
-      }
-    }
-    const text = body.output_text || (body.output ?? []).flatMap((block) => block.content ?? []).map((part) => part.text ?? "").join("\n");
-    if (text || urls.length) return { text, urls };
-  }
-  return null;
 }
 
 async function duckLinks(query: string): Promise<{ label: string; url: string }[]> {
