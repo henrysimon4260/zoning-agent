@@ -1,8 +1,16 @@
 # Lintel
 
-A conversational zoning and building-code desk for architects and developers. It asks **one question at a time**, writes each answer into a project file you can edit, then drafts a checklist of the building-code and zoning sections that govern the project. You mark what applies, add notes, and download a PDF titled with the property.
+A conversational zoning and building-code desk for New York City. Give it a street address in any of the five boroughs. It resolves the tax lot, reads MapPLUTO, and then asks **one question at a time** for what the city file does not already say. The report is titled with the address and carries the borough, block, lot, BBL, and a ZoLa link.
 
 The interview is deliberate: the model may phrase the acknowledgement, but the next question always comes from the server, so it cannot pile questions on or skip ahead. Visitors never paste an API key. The server calls xAI Grok at `https://api.x.ai/v1` with `XAI_API_KEY`.
+
+## New York City parcel
+
+The first question is a street address. The server calls [NYC Planning Labs GeoSearch](https://geosearch.planninglabs.nyc/v2/search), then [MapPLUTO](https://data.cityofnewyork.us/City-Government/Primary-Land-Use-Tax-Lot-Output-PLUTO-/64uk-42ks) (`64uk-42ks`) with the lot polygon. It intersects the same NYC Planning layers ZoLa draws: zoning districts, commercial overlays, special districts, subdistricts, limited height, E-designations, inclusionary housing, mandatory inclusionary housing, transit zones, and waterfront access plans. Historic districts are confirmed against the LPC historic-district layer. A condo unit lot (lots 1000–6999) is read through its billing lot. The latest DOB BIS certificate of occupancy for the address BIN is included and labeled temporary when it is. Failed layers are retried and, if they still fail, listed on the sheet instead of being invented. FRESH boundaries are not on that map service, so the checklist says so. Addresses outside the five boroughs are turned away. If the same house number and street exist in more than one borough, the desk asks which parcel.
+
+After that it asks only what remains: occupancy, construction type, proposed stories and height, proposed area, sprinklers, and scope.
+
+Zoning links point at [zr.planning.nyc.gov](https://zr.planning.nyc.gov/), including a reminder that City of Yes amended use, parking, and bulk. Building-code items point at the 2022 NYC Construction Codes. DOB, Landmarks, and FDNY items are included. Anything not read from MapPLUTO or the linked section is labeled unverified. Model IBC numbers, when shown, are a cross-check only.
 
 ## What works with no keys
 
@@ -28,6 +36,8 @@ Open [http://localhost:3000](http://localhost:3000).
 npm test
 npm run build
 ```
+
+`npm test` includes a live check of real lots in all five boroughs (plus a split lot, a condo billing lot, an E-designation, and a waterfront lot) against the zoning layers ZoLa uses. Set `NYC_LIVE=0` to skip that check when you are offline.
 
 ## Environment variables for Vercel
 

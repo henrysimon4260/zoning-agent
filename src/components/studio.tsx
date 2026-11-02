@@ -9,8 +9,8 @@ import { Sheet } from "@/components/sheet";
 import { syncProjects } from "@/lib/account";
 import { preserveChecklistEdits } from "@/lib/checklist";
 import { profileHash, projectTitle, reportFilename, uid } from "@/lib/format";
-import { applyAnswer, canDraft, nextQuestion, questionById } from "@/lib/interview";
-import { pineStreetProject } from "@/lib/sample";
+import { applyAnswer, canDraft, interviewProgress, nextQuestion, questionById } from "@/lib/interview";
+import { applyParcel, PARCEL_SKIPS, type ResolveResult } from "@/lib/nyc";
 import { browserSupabase } from "@/lib/supabase/client";
 import { supabasePublicConfig } from "@/lib/supabase/env";
 import {
@@ -37,7 +37,9 @@ export function Studio() {
   const [llmOn, setLlmOn] = useState(false);
   const [authOn, setAuthOn] = useState(false);
   const [email, setEmail] = useState<string | null>(null);
+  const [addressSuggestions, setAddressSuggestions] = useState<{ label: string; borough: string }[]>([]);
   const [toast, setToast] = useState("");
+  const [phase, setPhase] = useState<"" | "lot" | "checklist">("");
   const threadRef = useRef<HTMLDivElement>(null);
   const projectRef = useRef<ProjectRecord | null>(null);
 
@@ -66,7 +68,7 @@ export function Studio() {
 
   useEffect(() => {
     threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight, behavior: "smooth" });
-  }, [project?.messages.length, busy]);
+  }, [project?.messages.length, busy, phase]);
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
@@ -80,6 +82,20 @@ export function Studio() {
   }, []);
 
   const question = useMemo(() => (project ? nextQuestion(project.profile, project.skipped) : null), [project]);
+
+  useEffect(() => {
+    if (question?.id !== "identity" || draft.trim().length < 3) {
+      setAddressSuggestions([]);
+      return;
+    }
+    const handle = window.setTimeout(() => {
+      fetch(`/api/nyc/suggest?text=${encodeURIComponent(draft.trim())}`)
+        .then((response) => response.json())
+        .then((data: { suggestions?: { label: string; borough: string }[] }) => setAddressSuggestions(data.suggestions ?? []))
+        .catch(() => setAddressSuggestions([]));
+    }, 280);
+    return () => window.clearTimeout(handle);
+  }, [draft, question?.id]);
   const fresh = project ? !project.messages.some((message) => message.role === "user") : true;
   const stale = Boolean(project && project.checklist.length && project.analyzedHash && project.analyzedHash !== profileHash(project.profile));
 
@@ -143,6 +159,7 @@ export function Studio() {
   }
 
   async function runAnalysis(base: ProjectRecord, leadIn: ChatMessage[]) {
+    setPhase("checklist");
     const response = await fetch("/api/analyze", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -160,6 +177,7 @@ export function Studio() {
     });
     setTab("checklist");
     setPanel(true);
+    setPhase("");
   }
 
   async function send(text: string) {
@@ -195,6 +213,40 @@ export function Studio() {
       }
 
       const asked = nextQuestion(current.profile, current.skipped);
+      if (asked?.id === "identity" && !/^(skip|not sure|unknown|n\/a)$/i.test(trimmed)) {
+        const askedRecord: ProjectRecord = { ...current, messages: [...current.messages, userMessage] };
+        projectRef.current = askedRecord;
+        setProject(askedRecord);
+        setAddressSuggestions([]);
+        setPhase("lot");
+        const response = await fetch("/api/nyc/resolve", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: trimmed }),
+        });
+        if (response.status === 429) throw new Error("Too many requests. Wait a minute and try again.");
+        if (!response.ok) throw new Error("City data didn't answer. Try the address again in a moment.");
+        const resolved = (await response.json()) as ResolveResult;
+        setPhase("");
+        if (resolved.status !== "ok") {
+          commit({
+            ...askedRecord,
+            messages: [...askedRecord.messages, { id: uid(), role: "assistant", content: resolved.prompt }],
+          });
+          return;
+        }
+        const profile = applyParcel(askedRecord.profile, resolved.parcel);
+        const skipped = [...new Set([...askedRecord.skipped, ...PARCEL_SKIPS])];
+        const withParcel: ProjectRecord = { ...askedRecord, profile, skipped };
+        projectRef.current = withParcel;
+        setProject(withParcel);
+        setPanel(true);
+        const upcoming = nextQuestion(profile, skipped);
+        await streamReply(resolved.acknowledgement, upcoming?.prompt ?? null, JSON.stringify(profile), trimmed);
+        const after = projectRef.current;
+        if (after && !upcoming && canDraft(after.profile)) await runAnalysis(after, after.messages);
+        return;
+      }
       if (!asked) {
         commit({
           ...current,
@@ -241,6 +293,7 @@ export function Studio() {
       }));
     } finally {
       setBusy(false);
+      setPhase("");
     }
   }
 
@@ -339,17 +392,6 @@ export function Studio() {
     setSaveOpen(false);
   }
 
-  function openSample() {
-    const sample = pineStreetProject();
-    const current = projectRef.current;
-    if (current && current.messages.some((message) => message.role === "user")) {
-      saveProjects(upsertProject(loadProjects(), current));
-    }
-    commit(sample);
-    setTab("checklist");
-    setPanel(true);
-  }
-
   function startNew() {
     const created = createProject();
     commit(created);
@@ -366,6 +408,7 @@ export function Studio() {
   }
 
   const suggestions = question?.suggestions ?? [];
+  const progress = interviewProgress(project.profile, project.skipped);
   const showDraft = canDraft(project.profile) && (project.checklist.length === 0 || stale);
   const showContinue = Boolean(question && project.checklist.length > 0);
   const showReport = project.checklist.length > 0;
@@ -401,7 +444,8 @@ export function Studio() {
                 <h1>{question?.prompt ?? questionById("identity").prompt}</h1>
                 <p className="lede">{question?.hint} Answer in your own words. The sheet on the side is the file, and you can edit any line of it.</p>
                 <div className="suggestions" style={{ marginTop: 22 }}>
-                  <button className="chip" type="button" onClick={openSample}>Open the Pine Street sample</button>
+                  <button className="chip" type="button" onClick={() => void send("1 Centre Street, Manhattan")}>1 Centre Street, Manhattan</button>
+                  <button className="chip" type="button" onClick={() => void send("20 Willow Street, Brooklyn")}>20 Willow Street, Brooklyn</button>
                 </div>
               </div>
             ) : (
@@ -426,8 +470,42 @@ export function Studio() {
                 </div>
               ))
             )}
+            {busy && phase === "lot" ? (
+              <div className="bubble-row assistant">
+                <div className="bubble assistant reading">Reading the tax lot…</div>
+              </div>
+            ) : null}
+            {busy && phase === "checklist" ? (
+              <div className="bubble-row assistant">
+                <div className="bubble assistant reading">Drafting the checklist…</div>
+              </div>
+            ) : null}
           </div>
           <div className="composer-wrap">
+            <div className="progress" aria-label="Interview progress">
+              <span>{progress.done ? "Ready to draft" : `${progress.label} · ${progress.step} of ${progress.total}`}</span>
+              <div className="meter" aria-hidden><i style={{ width: `${progress.total ? (progress.step / progress.total) * 100 : 0}%` }} /></div>
+            </div>
+            {question?.id === "identity" && addressSuggestions.length > 0 ? (
+              <div className="suggest-list" role="listbox" aria-label="NYC address matches">
+                {addressSuggestions.map((suggestion) => (
+                  <button
+                    key={`${suggestion.label}-${suggestion.borough}`}
+                    type="button"
+                    onClick={() => {
+                      const named = suggestion.borough && !suggestion.label.toLowerCase().includes(suggestion.borough.toLowerCase())
+                        ? `${suggestion.label}, ${suggestion.borough}`
+                        : suggestion.label;
+                      void send(named);
+                    }}
+                    disabled={busy}
+                  >
+                    {suggestion.label}
+                    <span style={{ color: "var(--muted)" }}> · {suggestion.borough}</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
             <div className="suggestions">
               {suggestions.map((suggestion) => (
                 <button key={suggestion} className="chip" type="button" onClick={() => send(suggestion)} disabled={busy}>{suggestion}</button>
@@ -458,7 +536,7 @@ export function Studio() {
                   }
                 }}
               />
-              <button className="solid" type="submit" disabled={busy || !draft.trim()}>{busy ? "…" : "Send"}</button>
+              <button className="solid" type="submit" disabled={busy || !draft.trim()}>{phase === "lot" ? "Reading…" : busy ? "…" : "Send"}</button>
             </form>
             <div className="status-line">
               <span>{llmOn ? "Ordinance search is on." : "The interview runs on this desk. Ordinance search starts when the server has an xAI key."}</span>

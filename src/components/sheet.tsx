@@ -1,7 +1,7 @@
 "use client";
 
-import { CONSTRUCTION_LABELS, jurisdictionLabel, projectTitle } from "@/lib/format";
-import { CONSTRUCTION_TYPES, type ChecklistItem, type CodeEdition, type ProjectProfile, type ProjectScope, type Sprinkler } from "@/lib/types";
+import { CONSTRUCTION_LABELS, formatNumber, formatSqFt, jurisdictionLabel, projectTitle } from "@/lib/format";
+import { CONSTRUCTION_TYPES, type ChecklistItem, type CodeEdition, type NycParcel, type ProjectProfile, type ProjectScope, type Sprinkler } from "@/lib/types";
 
 const EDITIONS: CodeEdition[] = ["2021", "2018", "2024", "unknown"];
 const SCOPES: { value: ProjectScope | ""; label: string }[] = [
@@ -92,9 +92,70 @@ export function Sheet({
   );
 }
 
+function ParcelCard({ parcel }: { parcel: NycParcel }) {
+  const facts = [
+    parcel.commercialOverlays.length ? ["Overlay", parcel.commercialOverlays.join(", ")] : null,
+    parcel.specialDistricts.length ? ["Special district", parcel.specialDistricts.join(", ")] : null,
+    parcel.subdistricts.length ? ["Subdistrict", parcel.subdistricts.join(", ")] : null,
+    parcel.limitedHeight ? ["Limited height", parcel.limitedHeight] : null,
+    parcel.eDesignations.length ? ["E-designation", parcel.eDesignations.map((item) => (item.note ? `${item.id} · ${item.note}` : item.id)).join("; ")] : null,
+    parcel.mandatoryInclusionary.length ? ["MIH", parcel.mandatoryInclusionary.join("; ")] : null,
+    parcel.inclusionaryHousing.length ? ["Inclusionary", parcel.inclusionaryHousing.join("; ")] : null,
+    parcel.transitZone ? ["Transit area", parcel.transitZone] : null,
+    parcel.waterfront ? ["Waterfront", parcel.waterfront] : null,
+    parcel.historicDistrict ? ["Historic district", parcel.historicDistrict] : null,
+    parcel.landmark ? ["Landmark", parcel.landmark] : null,
+    parcel.certificateOfOccupancy
+      ? ["Latest BIS CO", `${parcel.certificateOfOccupancy.provisional ? "Temporary" : parcel.certificateOfOccupancy.issueType || "On file"} ${parcel.certificateOfOccupancy.jobType} · ${parcel.certificateOfOccupancy.date}`]
+      : null,
+    parcel.billingLot ? ["Condo", `Billing lot${parcel.condoNumber ? ` ${parcel.condoNumber}` : ""}${parcel.unitBbl ? ` · unit BBL ${parcel.unitBbl}` : ""}`] : null,
+  ].filter((row): row is string[] => Boolean(row));
+  return (
+    <aside className="parcel-card">
+      <p className="sheet-kicker">{parcel.borough}{parcel.splitZone ? " · Split lot" : ""} · BBL {parcel.bbl}</p>
+      <p className="parcel-address">{parcel.address}</p>
+      <p className="parcel-meta">
+        Block {parcel.block}, lot {parcel.lot}
+        {parcel.bin ? ` · BIN ${parcel.bin}` : ""}
+      </p>
+      <div className="parcel-districts">
+        {(parcel.zoningDistricts.length ? parcel.zoningDistricts : ["District not in the extract"]).map((district) => (
+          <span className="district" key={district}>{district}</span>
+        ))}
+      </div>
+      {facts.length ? (
+        <dl className="parcel-facts">
+          {facts.map(([label, value]) => (
+            <div key={label}>
+              <dt>{label}</dt>
+              <dd>{value}</dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
+      <p className="parcel-meta">
+        {[
+          parcel.lotArea != null ? formatSqFt(parcel.lotArea) : "",
+          parcel.lotFront != null ? `${formatNumber(parcel.lotFront)} ft front` : "",
+          parcel.builtFar != null ? `built FAR ${parcel.builtFar}` : "",
+          parcel.buildingClass ? `class ${parcel.buildingClass}` : "",
+          parcel.yearBuilt ? `built ${parcel.yearBuilt}` : "",
+        ].filter(Boolean).join(" · ")}
+      </p>
+      {parcel.layerGaps.length ? (
+        <ul className="parcel-gaps">
+          {parcel.layerGaps.map((gap) => <li key={gap}>{gap}</li>)}
+        </ul>
+      ) : null}
+      <p><a href={parcel.zolaUrl} target="_blank" rel="noreferrer">Open this lot in ZoLa</a></p>
+    </aside>
+  );
+}
+
 function ProfileForm({ profile, onProfile }: { profile: ProjectProfile; onProfile: (patch: Partial<ProjectProfile>) => void }) {
   return (
     <form onSubmit={(event) => event.preventDefault()}>
+      {profile.parcel ? <ParcelCard parcel={profile.parcel} /> : null}
       <label className="field"><span>Name</span><input value={profile.name} onChange={(event) => onProfile({ name: event.target.value })} /></label>
       <label className="field"><span>Address</span><input value={profile.address} onChange={(event) => onProfile({ address: event.target.value })} /></label>
       <div className="grid-2">
@@ -202,7 +263,12 @@ function Checklist({
   onRedraft: () => void;
 }) {
   if (checklist.length === 0) {
-    return <p style={{ color: "var(--muted)" }}>The checklist appears after the interview, or whenever you ask to draft it. {place ? `Jurisdiction on file: ${place}.` : "Add a city and state if you want ordinance links."}</p>;
+    return (
+      <div className="empty-check">
+        <p>The checklist lands here after the last question, or whenever you ask to draft it.</p>
+        <p>{place ? `Jurisdiction on file: ${place}.` : "An address in the five boroughs fills the parcel before the questions start."}</p>
+      </div>
+    );
   }
   return (
     <div>

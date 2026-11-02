@@ -26,6 +26,7 @@ function blank(overrides: Partial<ProjectProfile> = {}): ProjectProfile {
     city: "",
     county: "",
     state: "",
+    parcel: null,
     occupancy: [],
     constructionType: "",
     zoningDistrict: "",
@@ -201,7 +202,7 @@ describe("checklist and report", () => {
     const report = buildReport(project.profile, project.checklist, "2026-10-30T00:00:00.000Z");
     expect(report.title).toBe("412 East Pine Street");
     expect(report.filename).toBe("412-east-pine-street-code-analysis.pdf");
-    expect(report.disclaimer).toMatch(/not a code determination/i);
+    expect(report.disclaimer).toMatch(/not a Department of Buildings determination/i);
   });
 
   it("does not call a 2018 file compliant against 2021 numbers", () => {

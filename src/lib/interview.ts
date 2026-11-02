@@ -17,15 +17,15 @@ export type ApplyResult =
 export const QUESTIONS: Question[] = [
   {
     id: "identity",
-    prompt: "What should we call this one — a project name, or the street address?",
-    hint: "Either one is enough to title the report.",
-    suggestions: ["412 East Pine Street", "Harbor Office TI"],
+    prompt: "What's the New York City street address? Name the borough if you can — Manhattan, Brooklyn, Queens, the Bronx, or Staten Island.",
+    hint: "A street address in the five boroughs is enough. I'll read the parcel from city data.",
+    suggestions: ["1 Centre Street, Manhattan", "20 Willow Street, Brooklyn"],
   },
   {
     id: "jurisdiction",
-    prompt: "Who has jurisdiction? Give me the city or county, and the state.",
-    hint: "Zoning has to be read from a real ordinance, so the place matters.",
-    suggestions: ["Seattle, WA", "Austin, Texas", "King County, Washington"],
+    prompt: "I couldn't read a borough from that address. Which New York City borough is it in?",
+    hint: "This desk covers the five boroughs only.",
+    suggestions: ["Manhattan", "Brooklyn", "Queens", "Bronx", "Staten Island"],
   },
   {
     id: "occupancy",
@@ -53,8 +53,8 @@ export const QUESTIONS: Question[] = [
   },
   {
     id: "height",
-    prompt: "How tall is it, and how many stories above grade plane?",
-    hint: "Feet and stories are separate limits. One of them is enough to keep going.",
+    prompt: "How many stories and how tall is the proposal, in feet?",
+    hint: "This is the proposal, not the existing building MapPLUTO already listed.",
     suggestions: ["4 stories, 48 feet", "6 stories, 68 feet", "2 stories"],
   },
   {
@@ -101,12 +101,54 @@ export function questionById(id: QuestionId): Question {
   return question;
 }
 
+const STEP_LABEL: Record<QuestionId, string> = {
+  identity: "Address",
+  jurisdiction: "Borough",
+  occupancy: "Occupancy",
+  construction: "Construction",
+  zoning: "Zoning",
+  overlays: "Overlays",
+  height: "Height",
+  area: "Area",
+  sprinkler: "Sprinklers",
+  lot: "Lot",
+  frontage: "Yards",
+  scope: "Scope",
+  notes: "Notes",
+};
+
+export function interviewProgress(profile: ProjectProfile, skipped: QuestionId[]): { step: number; total: number; label: string; done: boolean } {
+  const active = QUESTIONS.filter((question) => !skipped.includes(question.id));
+  const current = nextQuestion(profile, skipped);
+  if (!current) return { step: active.length, total: active.length, label: "Ready to draft", done: true };
+  const index = active.findIndex((question) => question.id === current.id);
+  return { step: Math.max(index, 0) + 1, total: active.length, label: STEP_LABEL[current.id], done: false };
+}
+
 export function nextQuestion(profile: ProjectProfile, skipped: QuestionId[]): Question | null {
   for (const question of QUESTIONS) {
     if (skipped.includes(question.id)) continue;
-    if (!isAnswered(profile, question.id)) return question;
+    if (!isAnswered(profile, question.id)) return tailorQuestion(question, profile);
   }
   return null;
+}
+
+function tailorQuestion(question: Question, profile: ProjectProfile): Question {
+  const parcel = profile.parcel;
+  if (!parcel) return question;
+  if (question.id === "height" && parcel.existingFloors != null) {
+    return {
+      ...question,
+      prompt: `MapPLUTO lists the existing building at about ${parcel.existingFloors} stories. How many stories and how tall is the proposal?`,
+    };
+  }
+  if (question.id === "area" && parcel.existingArea != null) {
+    return {
+      ...question,
+      prompt: `MapPLUTO lists ${parcel.existingArea.toLocaleString("en-US")} square feet of existing building area. What area are you proposing, and is that one story or the whole building?`,
+    };
+  }
+  return question;
 }
 
 export function isAnswered(profile: ProjectProfile, id: QuestionId): boolean {

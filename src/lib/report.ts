@@ -46,7 +46,7 @@ const STATUS_LABEL: Record<string, string> = {
 
 const CITATION_LABEL: Record<string, string> = {
   "model-code": "2021 IBC model code — confirm the adopted edition",
-  verified: "Read from the linked ordinance",
+  verified: "Read from the linked source",
   unverified: "Unverified — not read from the adopted code",
 };
 
@@ -79,13 +79,32 @@ export function buildReport(profile: ProjectProfile, items: ChecklistItem[], gen
   return {
     title,
     filename: reportFilename(title),
-    kicker: "Lintel code analysis",
+    kicker: profile.parcel ? "Lintel · New York City" : "Lintel code analysis",
     disclaimer: DISCLAIMER,
     generatedAt,
     rows: [
       { label: "Project", value: dash(profile.name) },
       { label: "Address", value: dash(profile.address) },
+      { label: "Borough", value: dash(profile.parcel?.borough) },
+      { label: "Block / lot", value: profile.parcel ? `${profile.parcel.block} / ${profile.parcel.lot}` : "—" },
+      { label: "BBL", value: dash(profile.parcel?.bbl) },
+      { label: "ZoLa", value: dash(profile.parcel?.zolaUrl) },
+      { label: "Split lot", value: profile.parcel ? (profile.parcel.splitZone ? "Yes" : "No") : "—" },
+      { label: "Special districts", value: profile.parcel?.specialDistricts.length ? profile.parcel.specialDistricts.join(", ") : "—" },
+      { label: "Subdistricts", value: profile.parcel?.subdistricts.length ? profile.parcel.subdistricts.join(", ") : "—" },
+      { label: "E-designations", value: profile.parcel?.eDesignations.length ? profile.parcel.eDesignations.map((item) => (item.note ? `${item.id} (${item.note})` : item.id)).join("; ") : "—" },
+      { label: "Transit area", value: dash(profile.parcel?.transitZone) },
+      { label: "Waterfront", value: dash(profile.parcel?.waterfront) },
+      {
+        label: "Certificate of occupancy",
+        value: profile.parcel?.certificateOfOccupancy
+          ? `${profile.parcel.certificateOfOccupancy.provisional ? "Temporary" : profile.parcel.certificateOfOccupancy.issueType || "On file"} ${profile.parcel.certificateOfOccupancy.jobType} · ${profile.parcel.certificateOfOccupancy.date}`
+          : "—",
+      },
+      { label: "Data notes", value: profile.parcel?.layerGaps.length ? profile.parcel.layerGaps.join(" ") : "—" },
       { label: "Jurisdiction", value: dash(jurisdictionLabel(profile)) },
+      { label: "Building class", value: dash(profile.parcel?.buildingClass) },
+      { label: "Year built", value: dash(profile.parcel?.yearBuilt) },
       { label: "Occupancy", value: profile.occupancy.length ? profile.occupancy.join(", ") : "—" },
       { label: "Construction", value: profile.constructionType ? CONSTRUCTION_LABELS[profile.constructionType] : "—" },
       { label: "Zoning district", value: dash(profile.zoningDistrict) },
