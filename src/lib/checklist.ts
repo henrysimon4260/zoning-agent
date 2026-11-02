@@ -1,4 +1,5 @@
 import { CONSTRUCTION_LABELS, formatNumber, formatSqFt, jurisdictionLabel, occupancyPhrase } from "@/lib/format";
+import { contextualizeChecklist } from "@/lib/nyc";
 import { formatAllowable } from "@/lib/limits";
 import { assessHeightAndArea, userAreas } from "@/lib/limits";
 import { modelCodeSource, zoningSearchLinks } from "@/lib/sources";
@@ -591,7 +592,7 @@ export function buildChecklist(profile: ProjectProfile, findings: ZoningFindings
     verifiedSources,
   );
 
-  return [
+  return contextualizeChecklist(profile, [
     heightItem,
     storyItem,
     areaItem,
@@ -612,7 +613,7 @@ export function buildChecklist(profile: ProjectProfile, findings: ZoningFindings
     coverage,
     parking,
     overlay,
-  ];
+  ]);
 }
 
 function sprinklerRequirements(profile: ProjectProfile, perStory: number | null): {

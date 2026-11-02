@@ -13,6 +13,7 @@ export function emptyProfile(id = uid()): ProjectProfile {
     city: "",
     county: "",
     state: "",
+    parcel: null,
     occupancy: [],
     constructionType: "",
     zoningDistrict: "",

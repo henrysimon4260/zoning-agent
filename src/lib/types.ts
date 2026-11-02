@@ -23,6 +23,57 @@ export type ProjectScope = "new" | "addition" | "alteration" | "change-of-occupa
 
 export type AreaBasis = "per-story" | "total" | "";
 
+export type NycBorough = "Manhattan" | "Bronx" | "Brooklyn" | "Queens" | "Staten Island";
+
+export type NycParcel = {
+  borough: NycBorough;
+  boroughCode: string;
+  block: string;
+  lot: string;
+  bbl: string;
+  bin: string;
+  address: string;
+  zip: string;
+  zoningDistricts: string[];
+  commercialOverlays: string[];
+  specialDistricts: string[];
+  limitedHeight: string;
+  historicDistrict: string;
+  landmark: string;
+  splitZone: boolean;
+  subdistricts: string[];
+  eDesignations: { id: string; note: string }[];
+  inclusionaryHousing: string[];
+  mandatoryInclusionary: string[];
+  transitZone: string;
+  waterfront: string;
+  certificateOfOccupancy: {
+    date: string;
+    jobType: string;
+    issueType: string;
+    provisional: boolean;
+    latestFinalDate: string;
+  } | null;
+  condoNumber: string;
+  billingLot: boolean;
+  unitBbl: string;
+  layerGaps: string[];
+  lotArea: number | null;
+  lotFront: number | null;
+  lotDepth: number | null;
+  builtFar: number | null;
+  residFar: number | null;
+  commFar: number | null;
+  facilFar: number | null;
+  buildingClass: string;
+  yearBuilt: string;
+  existingFloors: number | null;
+  existingArea: number | null;
+  landUse: string;
+  zolaUrl: string;
+  source: string;
+};
+
 export type ProjectProfile = {
   id: string;
   name: string;
@@ -30,6 +81,7 @@ export type ProjectProfile = {
   city: string;
   county: string;
   state: string;
+  parcel: NycParcel | null;
   occupancy: string[];
   constructionType: ConstructionType | "";
   zoningDistrict: string;
@@ -126,8 +178,8 @@ export type ZoningFindings = {
 };
 
 export const DISCLAIMER =
-  "Lintel is a research aid for architects and developers. It is not a code determination, a zoning opinion, or a permit. Building-code figures are the unamended 2021 International Building Code model and can differ from the edition and local amendments your jurisdiction adopted. A zoning statement is verified only when it was read on a linked ordinance page; everything else is labeled unverified. Confirm the adopted code with the authority having jurisdiction.";
+  "Lintel is a research aid for New York City projects. It is not a Department of Buildings determination, a zoning opinion, a Landmarks approval, or a permit. Parcel facts are read from NYC Planning Labs GeoSearch, MapPLUTO, and NYC Planning zoning layers. A certificate of occupancy, when shown, is the latest DOB BIS record and may be temporary. Zoning Resolution and 2022 NYC Building Code requirements are labeled unverified unless the text was read from the linked section. MapPLUTO is a planning snapshot, not the Zoning Map. Confirm with ZoLa, the Zoning Resolution, and the Department of Buildings.";
 
-export const MODEL_CODE_LABEL = "2021 IBC model code";
+export const MODEL_CODE_LABEL = "2022 NYC Building Code";
 
 export const ICC_CODE_URL = "https://codes.iccsafe.org/content/IBC2021P1";

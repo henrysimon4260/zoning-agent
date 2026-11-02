@@ -1,87 +1,89 @@
 # Lintel
 
-A conversational zoning and building-code desk for architects and developers. It asks **one question at a time**, writes each answer into a project file you can edit, then drafts a checklist of the building-code and zoning sections that govern the project. You mark what applies, add notes, and download a PDF titled with the property.
+A conversational zoning and building-code desk for New York City. Give it a street address in any of the five boroughs. It resolves the tax lot, reads MapPLUTO, and then asks **one question at a time** for what the city file does not already say. The report is titled with the address and carries the borough, block, lot, BBL, and a ZoLa link.
 
-The interview is deliberate: the model may phrase the acknowledgement, but the next question always comes from the desk, so it cannot pile questions on or skip ahead.
+The interview is deliberate: the model may phrase the acknowledgement, but the next question always comes from the server, so it cannot pile questions on or skip ahead. Visitors never paste an API key. The server calls xAI Grok at `https://api.x.ai/v1` with `XAI_API_KEY`.
 
-## What you can do without any keys
+## New York City parcel
 
-- Walk the interview and edit the project sheet.
-- Compare height, stories, and area with the **unamended 2021 IBC** model tables (504.3, 504.4, 506.2, Equation 5-1 / 5-2), plus egress, sprinklers, fire resistance, accessibility, and the usual exception paths (mezzanines, podiums, unlimited area, existing buildings).
-- Get zoning headings (use, height, setbacks, FAR, coverage, parking, overlays) with search links to Municode and American Legal. Those items stay labeled **unverified** until an ordinance page is actually read.
-- Generate the PDF.
-- Keep every project in this browser.
+The first question is a street address. The server calls [NYC Planning Labs GeoSearch](https://geosearch.planninglabs.nyc/v2/search), then [MapPLUTO](https://data.cityofnewyork.us/City-Government/Primary-Land-Use-Tax-Lot-Output-PLUTO-/64uk-42ks) (`64uk-42ks`) with the lot polygon. It intersects the same NYC Planning layers ZoLa draws: zoning districts, commercial overlays, special districts, subdistricts, limited height, E-designations, inclusionary housing, mandatory inclusionary housing, transit zones, and waterfront access plans. Historic districts are confirmed against the LPC historic-district layer. A condo unit lot (lots 1000–6999) is read through its billing lot. The latest DOB BIS certificate of occupancy for the address BIN is included and labeled temporary when it is. Failed layers are retried and, if they still fail, listed on the sheet instead of being invented. FRESH boundaries are not on that map service, so the checklist says so. Addresses outside the five boroughs are turned away. If the same house number and street exist in more than one borough, the desk asks which parcel.
 
-Numbers are model-code figures, not a permit review. The report says so, in the document, not only here.
+After that it asks only what remains: occupancy, construction type, proposed stories and height, proposed area, sprinklers, and scope.
+
+Zoning links point at [zr.planning.nyc.gov](https://zr.planning.nyc.gov/), including a reminder that City of Yes amended use, parking, and bulk. Building-code items point at the 2022 NYC Construction Codes. DOB, Landmarks, and FDNY items are included. Anything not read from MapPLUTO or the linked section is labeled unverified. Model IBC numbers, when shown, are a cross-check only.
+
+## What works with no keys
+
+- The interview and the editable project sheet.
+- Height, stories, and area compared with the **unamended 2021 IBC** model tables (504.3, 504.4, 506.2, Equation 5-1 / 5-2), plus egress, sprinklers, fire resistance, accessibility, and the usual exception paths.
+- Zoning headings with search links to Municode and American Legal. Those items stay **unverified** until the server has read an ordinance page.
+- The PDF.
+- Projects saved in this browser.
+
+Numbers are model-code figures, not a permit review. The report says so.
 
 ## Run it
 
 ```bash
 npm install
+cp .env.example .env.local
 npm run dev
 ```
 
-Open [http://localhost:3000/zoning-agent/](http://localhost:3000/zoning-agent/).
+Open [http://localhost:3000](http://localhost:3000).
 
 ```bash
 npm test
 npm run build
 ```
 
-## Live site
+`npm test` includes a live check of real lots in all five boroughs (plus a split lot, a condo billing lot, an E-designation, and a waterfront lot) against the zoning layers ZoLa uses. Set `NYC_LIVE=0` to skip that check when you are offline.
 
-[https://henrysimon4260.github.io/zoning-agent/](https://henrysimon4260.github.io/zoning-agent/)
+## Environment variables for Vercel
 
-The site is a static export. GitHub Pages has no Node server, so the model is called from the browser.
+Set these in the Vercel project (Settings → Environment Variables). Do not prefix the model key with `NEXT_PUBLIC_`.
 
-## Environment
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `XAI_API_KEY` | Yes, for the model | Server-only key. Replies and streaming go to `https://api.x.ai/v1/chat/completions`. Ordinance lookup uses the same host. |
+| `XAI_MODEL` | No | Defaults to `grok-4.7`. |
+| `NEXT_PUBLIC_SUPABASE_URL` | No | Supabase project URL. Without it, Save keeps the draft on this device. |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | No | Supabase anon (publishable) key. Pair it with the URL. |
 
-Copy `.env.example` to `.env.local` for local builds. Every variable is optional. Do not put a model API key in `NEXT_PUBLIC_*` — that would ship the secret inside the static JavaScript. Enter the key in the app under **Model**. It stays in this browser's local storage.
+That is the full set. There is no visitor-supplied model key.
 
-| Variable | What it unlocks |
-| --- | --- |
-| Model key in the **Model** panel | Streamed acknowledgements, a second pass on messy answers, and ordinance search. Stored only in this browser. OpenAI-compatible base URL can point at your own proxy. |
-| `NEXT_PUBLIC_LLM_BASE_URL` | Optional build-time default for that endpoint. |
-| `NEXT_PUBLIC_SUPABASE_URL` | Optional build-time Supabase project. You can paste the URL and publishable key in **Model** instead, and skip a rebuild. |
-| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Preferred Supabase browser key. `NEXT_PUBLIC_SUPABASE_ANON_KEY` also works. |
-
-The app never asks you to sign in until you press **Save**.
-
-Anonymous work stays in `localStorage`. On the first successful save, drafts on the device are copied to the account. Signing in later merges by project id and keeps the newer copy.
+API routes are limited to 40 requests per minute per IP. The limit lives in the server instance, so it is a basic guard, not a global quota.
 
 ### Supabase
 
 1. Create a project and turn on email/password. Magic link uses the same project.
-2. Add `http://localhost:3000/zoning-agent/auth/callback/` and `https://henrysimon4260.github.io/zoning-agent/auth/callback/` to the auth redirect allow list.
+2. Add `http://localhost:3000/auth/callback` and your Vercel URL (`https://<project>.vercel.app/auth/callback`) to the redirect allow list.
 3. Run `supabase/migrations/20261030120000_projects.sql` in the SQL editor. It creates `public.projects`, enables row level security, and limits every row to `auth.uid()`. The policies do not read `user_metadata`.
 
-There is no service-role key in this app. The browser uses the publishable key, and the database policies do the rest.
+The browser uses the anon key. There is no service-role key in this app. Anonymous work stays in `localStorage` and is copied to the account the first time a signed-in user saves.
+
+The app does not ask anyone to sign in until they press **Save**.
 
 ## Deploy
 
-Production is GitHub Pages. `main` runs `.github/workflows/pages.yml`, which builds with `output: 'export'` and `basePath: /zoning-agent`, then deploys the `out/` directory.
-
-Locally:
-
 ```bash
-npm run build
-npx serve out
+npx vercel
 ```
 
-The dev server is at [http://localhost:3000/zoning-agent/](http://localhost:3000/zoning-agent/).
+Or, with a token already in the environment:
 
-Pages has to be set to **GitHub Actions** as the source (Settings → Pages, or `gh api` `build_type=workflow`). Optional repository secrets, all build-time and public: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `NEXT_PUBLIC_LLM_BASE_URL`.
+```bash
+npm run deploy
+```
 
-Add this redirect URL in Supabase if you use magic links on the live site:
-
-`https://henrysimon4260.github.io/zoning-agent/auth/callback/`
+`vercel.json` marks the app as Next.js and tells caches not to store `/api` responses. Production is a Node server, not a static export. The GitHub Pages workflow has been removed.
 
 ## How a checklist item is labeled
 
-- **Model code** — unamended 2021 IBC. If you set the edition to 2018 or 2024, comparisons stay “needs a closer look” instead of being marked within or over a 2021 number.
-- **Verified** — a zoning figure was present in text fetched from a linked ordinance page.
-- **Unverified** — a search lead, or a reading that did not contain the number. Do not treat it as the adopted standard.
+- **Model code** — unamended 2021 IBC. If the file says 2018 or 2024, comparisons stay “needs a closer look” instead of being marked within or over a 2021 number.
+- **Verified** — a zoning figure was present in text the server fetched from a linked ordinance page.
+- **Unverified** — a search lead, or a reading that did not contain the number.
 
 ## Stack
 
-Next.js (App Router), React, TypeScript, Tailwind, PDF generation with `pdf-lib`, optional Supabase Auth. Tests are Vitest and cover the interview, the IBC area examples, citation grounding, and the PDF header.
+Next.js (App Router), React, TypeScript, Tailwind, PDF generation with `pdf-lib` on the server, optional Supabase Auth. Tests are Vitest and cover the interview, the IBC area examples, citation grounding, the PDF header, and the rate limiter.

@@ -1,8 +1,11 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
-import { authCallbackUrl } from "@/lib/base-path";
 import { browserSupabase } from "@/lib/supabase/client";
+
+function authCallbackUrl(): string {
+  return `${window.location.origin}/auth/callback`;
+}
 
 export function SaveDialog({
   configured,
@@ -91,7 +94,7 @@ export function SaveDialog({
           </>
         ) : (
           <>
-            <p>This draft is already stored in the browser. To save it to an account, open Model and add a Supabase URL and publishable key, or bake those into the Pages build. The SQL for the projects table is in <code>supabase/migrations</code>. Add <code>{authCallbackUrl()}</code> to the Supabase redirect allow list.</p>
+            <p>This draft stays in the browser. Account save needs <code>NEXT_PUBLIC_SUPABASE_URL</code> and <code>NEXT_PUBLIC_SUPABASE_ANON_KEY</code> on the server. The SQL is in <code>supabase/migrations</code>. Nothing else on this desk asks you to sign in.</p>
             <button className="solid" type="button" onClick={onClose}>Keep it on this device</button>
           </>
         )}
