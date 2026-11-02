@@ -9,7 +9,7 @@ import { Sheet } from "@/components/sheet";
 import { syncProjects } from "@/lib/account";
 import { preserveChecklistEdits } from "@/lib/checklist";
 import { profileHash, projectTitle, reportFilename, uid } from "@/lib/format";
-import { applyAnswer, canDraft, interviewProgress, nextQuestion, questionById } from "@/lib/interview";
+import { applyAnswer, canDraft, interviewProgress, nextQuestion } from "@/lib/interview";
 import { applyParcel, PARCEL_SKIPS, type ResolveResult } from "@/lib/nyc";
 import { browserSupabase } from "@/lib/supabase/client";
 import { supabasePublicConfig } from "@/lib/supabase/env";
@@ -440,10 +440,9 @@ export function Studio() {
           <div className="thread" ref={threadRef} aria-live="polite">
             {fresh ? (
               <div className="hero">
-                <p className="kicker">One question at a time</p>
-                <h1>{question?.prompt ?? questionById("identity").prompt}</h1>
-                <p className="lede">{question?.hint} Answer in your own words. The sheet on the side is the file, and you can edit any line of it.</p>
-                <div className="suggestions" style={{ marginTop: 22 }}>
+                <h1>NYC zoning, instantly.</h1>
+                <p className="lede">Enter an address. Get the zoning, code sections, and a project-ready report.</p>
+                <div className="suggestions">
                   <button className="chip" type="button" onClick={() => void send("1 Centre Street, Manhattan")}>1 Centre Street, Manhattan</button>
                   <button className="chip" type="button" onClick={() => void send("20 Willow Street, Brooklyn")}>20 Willow Street, Brooklyn</button>
                 </div>
@@ -482,10 +481,12 @@ export function Studio() {
             ) : null}
           </div>
           <div className="composer-wrap">
-            <div className="progress" aria-label="Interview progress">
-              <span>{progress.done ? "Ready to draft" : `${progress.label} · ${progress.step} of ${progress.total}`}</span>
-              <div className="meter" aria-hidden><i style={{ width: `${progress.total ? (progress.step / progress.total) * 100 : 0}%` }} /></div>
-            </div>
+            {fresh ? null : (
+              <div className="progress" aria-label="Interview progress">
+                <span>{progress.done ? "Ready to draft" : `${progress.label} · ${progress.step} of ${progress.total}`}</span>
+                <div className="meter" aria-hidden><i style={{ width: `${progress.total ? (progress.step / progress.total) * 100 : 0}%` }} /></div>
+              </div>
+            )}
             {question?.id === "identity" && addressSuggestions.length > 0 ? (
               <div className="suggest-list" role="listbox" aria-label="NYC address matches">
                 {addressSuggestions.map((suggestion) => (
@@ -507,7 +508,7 @@ export function Studio() {
               </div>
             ) : null}
             <div className="suggestions">
-              {suggestions.map((suggestion) => (
+              {fresh ? null : suggestions.map((suggestion) => (
                 <button key={suggestion} className="chip" type="button" onClick={() => send(suggestion)} disabled={busy}>{suggestion}</button>
               ))}
               {showDraft ? <button className="chip" type="button" onClick={() => send("Draft the checklist")} disabled={busy}>Draft the checklist</button> : null}
@@ -525,7 +526,7 @@ export function Studio() {
               <textarea
                 id="answer"
                 rows={1}
-                placeholder={question ? "Answer, or type skip" : "Ask for the checklist or the report"}
+                placeholder={fresh ? "New York City address" : question ? "Answer, or type skip" : "Ask for the checklist or the report"}
                 value={draft}
                 disabled={busy}
                 onChange={(event) => setDraft(event.target.value)}

@@ -171,8 +171,8 @@ button { cursor: pointer; }
 }
 
 .hero {
-  max-width: 740px;
-  padding-top: 6vh;
+  max-width: 680px;
+  padding-top: 12vh;
   animation: rise 480ms ease;
 }
 
@@ -194,12 +194,14 @@ button { cursor: pointer; }
 }
 
 .lede {
-  max-width: 46rem;
+  max-width: 36rem;
   color: var(--muted);
-  font-size: 17px;
-  line-height: 1.5;
-  margin: 18px 0 0;
+  font-size: 18px;
+  line-height: 1.45;
+  margin: 16px 0 0;
 }
+
+.hero .suggestions { margin-top: 28px; }
 
 .bubble-row { display: flex; margin: 0 0 18px; animation: rise 360ms ease; }
 .bubble-row.user { justify-content: flex-end; }
